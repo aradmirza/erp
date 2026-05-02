@@ -1,0 +1,93 @@
+# ============================================
+# CRITICAL - SECRETS & TOKENS
+# ============================================
+.env
+.env.local
+.env.*
+!.env.example
+*token*
+*Token*
+*tocken*
+**/token.txt
+**/*credential*
+**/*secret*
+github*/
+**/github*token*/
+**/github*tocken*/
+
+# ============================================
+# Database & Backups
+# ============================================
+*.sql
+*.sql.gz
+*.db
+*.sqlite
+*.bak
+*.backup
+_SENSITIVE_BACKUP*/
+backup/
+backups/
+
+# ============================================
+# Large media files
+# ============================================
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+
+# ============================================
+# User uploaded content - tracked by .gitkeep
+# ============================================
+uploads/profiles/*
+uploads/receipts/*
+uploads/settings/*
+admin/uploads/**
+!admin/uploads/.gitkeep
+!admin/uploads/videos/
+!admin/uploads/videos/.gitkeep
+!uploads/profiles/.gitkeep
+!uploads/receipts/.gitkeep
+!uploads/settings/.gitkeep
+
+# ============================================
+# Office temporary files
+# ============================================
+~$*
+~*.tmp
+*.tmp
+.~lock.*
+
+# ============================================
+# IDE & OS files
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================
+# Claude Code (AI assistant) local files
+# ============================================
+.claude/
+
+# ============================================
+# Logs & Cache
+# ============================================
+*.log
+error_log
+debug.log
+*.cache
+.cache/
+
+# ============================================
+# Dependencies (if added later)
+# ============================================
+/vendor/
+node_modules/

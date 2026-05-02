@@ -1,0 +1,24 @@
+# Sodai Lagbe ERP - Apache Configuration
+
+# ============================================
+# .env ফাইল সরাসরি browser এ access বন্ধ
+# ============================================
+<Files ".env">
+    Order allow,deny
+    Deny from all
+</Files>
+
+<Files "config.php">
+    Order allow,deny
+    Deny from all
+</Files>
+
+# ============================================
+# Directory listing বন্ধ করো
+# ============================================
+Options -Indexes
+
+# ============================================
+# PHP error production mode এ hide করো
+# ============================================
+php_flag display_errors off
