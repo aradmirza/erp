@@ -3,19 +3,18 @@ ini_set('session.cookie_lifetime', 86400);
 ini_set('session.gc_maxlifetime', 86400);
 session_set_cookie_params(86400);
 session_start();
-date_default_timezone_set('Asia/Dhaka');
 
 if(!isset($_SESSION['admin_logged_in'])) { header("Location: login.php"); exit; }
 // === Role-Based Access Control (RBAC) ===
 if(isset($_SESSION['admin_role']) && $_SESSION['admin_role'] === 'staff') {
     $perms = $_SESSION['staff_permissions'] ?? [];
-    if(!in_array('manage_kpi', $perms)) { 
-        die("<div style='text-align:center; padding:50px; font-family:sans-serif;'><h2 style='color:red;'>Access Denied!</h2><p>আপনার এই পেজে প্রবেশের অনুমতি নেই।</p></div>"); 
+    if(!in_array('manage_kpi', $perms)) {
+        die("<div style='text-align:center; padding:50px; font-family:sans-serif;'><h2 style='color:red;'>Access Denied!</h2><p>আপনার এই পেজে প্রবেশের অনুমতি নেই।</p></div>");
     }
 }
 // ==========================================
 
-require_once 'db.php';
+require_once __DIR__ . '/db.php';
 
 // ==========================================
 // SAFE DATABASE QUERY METHODS (Anti-500 Error)
@@ -194,14 +193,15 @@ try {
 // ==========================================
 if (!function_exists('sendSMSAdmin')) {
     function sendSMSAdmin($phone, $msg) {
-        $api_key = 'iBfwXO9JKX7X1Yul8dGE76RPk5dOiLg7vRzQv6vM';
+        $api_key = $_ENV['SMS_API_KEY'] ?? '';
+        if(empty($api_key)) return false;
         $curl = curl_init();
-        curl_setopt_array($curl, array(
-          CURLOPT_URL => 'https://api.sms.net.bd/sendsms',
-          CURLOPT_RETURNTRANSFER => true,
-          CURLOPT_CUSTOMREQUEST => 'POST',
-          CURLOPT_POSTFIELDS => array('api_key' => $api_key, 'msg' => $msg, 'to' => $phone),
-        ));
+        curl_setopt_array($curl, [
+            CURLOPT_URL            => 'https://api.sms.net.bd/sendsms',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST  => 'POST',
+            CURLOPT_POSTFIELDS     => ['api_key' => $api_key, 'msg' => $msg, 'to' => $phone],
+        ]);
         $response = curl_exec($curl);
         curl_close($curl);
         return $response;
@@ -228,8 +228,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
         $color= $_POST['color'] ?? '#3B82F6';
         $icon = $_POST['icon'] ?? 'fa-user-tie';
         if($rid > 0) {
+            // পুরনো নাম UPDATE এর আগে নিতে হবে
+            $old_stmt = $pdo->prepare("SELECT role_name FROM kpi_roles WHERE id=?");
+            $old_stmt->execute([$rid]);
+            $old_role_name = $old_stmt->fetchColumn();
+
             $pdo->prepare("UPDATE kpi_roles SET role_name=?, role_description=?, department=?, color=?, icon=? WHERE id=?")->execute([$name,$desc,$dept,$color,$icon,$rid]);
-            $pdo->prepare("UPDATE kpi_metrics SET role_name=? WHERE role_name=(SELECT role_name FROM kpi_roles WHERE id=?)")->execute([$name,$rid]);
+
+            if($old_role_name && $old_role_name !== $name) {
+                $pdo->prepare("UPDATE kpi_metrics     SET role_name=? WHERE role_name=?")->execute([$name, $old_role_name]);
+                $pdo->prepare("UPDATE role_settings   SET role_name=? WHERE role_name=?")->execute([$name, $old_role_name]);
+                $pdo->prepare("UPDATE advisor_targets  SET role_name=? WHERE role_name=?")->execute([$name, $old_role_name]);
+                $pdo->prepare("UPDATE kpi_evaluations SET role_name=? WHERE role_name=?")->execute([$name, $old_role_name]);
+                $pdo->prepare("UPDATE kpi_daily_updates SET role_name=? WHERE role_name=?")->execute([$name, $old_role_name]);
+            }
         } else {
             $pdo->prepare("INSERT INTO kpi_roles (role_name, role_description, department, color, icon) VALUES (?,?,?,?,?)")->execute([$name,$desc,$dept,$color,$icon]);
             $pdo->prepare("INSERT IGNORE INTO role_settings (role_name, profit_share_pct) VALUES (?,0)")->execute([$name]);
@@ -275,8 +287,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
         $rname  = $_POST['role_name'];
         $targets= $_POST['targets'] ?? [];
         $td_j   = json_encode($targets, JSON_UNESCAPED_UNICODE);
-        
-        $pdo->prepare("INSERT INTO advisor_targets (user_id, role_name, target_data) VALUES (?,?,?) ON DUPLICATE KEY UPDATE target_data=?, role_name=?")->execute([$uid,$rname,$td_j,$td_j,$rname]);
+
+        // Duplicate check করো — একই user একই role এ দুবার assign হওয়া ঠেকাও
+        $chk_dup = $pdo->prepare("SELECT id FROM advisor_targets WHERE user_id=? AND role_name=?");
+        $chk_dup->execute([$uid, $rname]);
+        $existing = $chk_dup->fetch();
+        if($existing) {
+            $pdo->prepare("UPDATE advisor_targets SET target_data=? WHERE id=?")->execute([$td_j, $existing['id']]);
+        } else {
+            $pdo->prepare("INSERT INTO advisor_targets (user_id, role_name, target_data) VALUES (?,?,?)")->execute([$uid, $rname, $td_j]);
+        }
         
         // SMS Notification Logic
         $stmt_ph = $pdo->prepare("SELECT phone FROM shareholder_accounts WHERE id=?");
@@ -312,7 +332,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
 
         if($rname && $uid > 0) {
             $total = array_sum($scores);
-            $grade = $total >= 90 ? 'Exceptional' : ($total >= 75 ? 'Excellent' : ($total >= 60 ? 'Good' : ($total >= 40 ? 'Average' : 'Needs Improvement')));
+            $grade = $total >= 90 ? 'Exceptional' : ($total >= 75 ? 'Excellent' : ($total >= 60 ? 'Good' : ($total >= 40 ? 'Average' : ($total >= 20 ? 'Needs Improvement' : 'Poor'))));
             $mdata = json_encode($scores, JSON_UNESCAPED_UNICODE);
             $chk = $pdo->prepare("SELECT id FROM kpi_evaluations WHERE user_id=? AND role_name=? AND eval_month=? AND eval_year=?");
             $chk->execute([$uid,$rname,$month,$year]);
@@ -498,8 +518,16 @@ body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; 
             <h2 class="text-lg font-black tracking-tight text-slate-800 hidden sm:block">KPI ম্যানেজমেন্ট</h2>
         </div>
         <div class="flex items-center gap-3">
+            <!-- Pending Reports Alert Bell -->
+            <?php if(count($pending_reports) > 0): ?>
+            <button onclick="switchTab('reports')" class="relative bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 px-3 py-1.5 rounded-lg text-xs font-black shadow-sm transition flex items-center gap-2" title="<?= count($pending_reports) ?>টি রিপোর্ট পেন্ডিং">
+                <i class="fas fa-bell"></i>
+                <span class="hidden md:inline"><?= count($pending_reports) ?> পেন্ডিং</span>
+                <span class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-rose-500 text-white text-[9px] font-black rounded-full flex items-center justify-center animate-pulse"><?= count($pending_reports) ?></span>
+            </button>
+            <?php endif; ?>
             <button onclick="switchTab('settings')" class="bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition flex items-center gap-2 border border-slate-200">
-                <i class="fas fa-cogs text-blue-500"></i> <span class="hidden md:inline">KPI Settings</span>
+                <i class="fas fa-cogs text-blue-500"></i> <span class="hidden md:inline">Settings</span>
             </button>
             <div class="text-right hidden sm:block border-l border-slate-200 pl-3">
                 <div class="text-sm font-bold leading-tight"><?= htmlspecialchars($_SESSION['admin_username'] ?? 'Admin') ?></div>
@@ -519,25 +547,42 @@ body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; 
             <?php if($warning): ?><div class="bg-amber-50 text-amber-700 px-4 py-3 rounded-xl text-sm font-bold shadow-sm border border-amber-200 flex items-center animate-fade-in"><i class="fas fa-exclamation-circle mr-2 text-lg"></i> <?= $warning ?></div><?php endif; ?>
 
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in">
-              <div class="app-card p-5 border-l-4 border-blue-500">
-                <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">মোট পদ</div>
+              <div class="app-card p-5 border-l-4 border-blue-500 cursor-pointer hover:shadow-md transition" onclick="switchTab('roles')">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500">মোট পদ</div>
+                    <div class="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center"><i class="fas fa-layer-group text-blue-500 text-xs"></i></div>
+                </div>
                 <div class="text-2xl font-black text-blue-600"><?= count($all_roles) ?></div>
-                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= count($departments) ?> বিভাগে</div>
+                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= count($departments) ?> বিভাগে সক্রিয়</div>
               </div>
-              <div class="app-card p-5 border-l-4 border-indigo-500">
-                <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">অ্যাডভাইজর নিযুক্ত</div>
+              <div class="app-card p-5 border-l-4 border-indigo-500 cursor-pointer hover:shadow-md transition" onclick="switchTab('reports')">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500">অ্যাডভাইজর</div>
+                    <div class="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center relative">
+                        <i class="fas fa-user-tie text-indigo-500 text-xs"></i>
+                        <?php if(count($pending_reports) > 0): ?><span class="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center"><?= count($pending_reports) ?></span><?php endif; ?>
+                    </div>
+                </div>
                 <div class="text-2xl font-black text-indigo-600"><?= $total_advisors ?></div>
-                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= count($pending_reports) ?> রিপোর্ট পেন্ডিং</div>
+                <div class="text-[9px] font-bold <?= count($pending_reports) > 0 ? 'text-rose-500' : 'text-slate-400' ?> mt-1">
+                    <?= count($pending_reports) > 0 ? count($pending_reports).' টি রিপোর্ট অপেক্ষায়!' : 'সব রিপোর্ট review করা হয়েছে ✅' ?>
+                </div>
               </div>
               <div class="app-card p-5 border-l-4 border-emerald-500">
-                <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">অ্যাডভাইজর ফান্ড</div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500">অ্যাডভাইজর ফান্ড</div>
+                    <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center"><i class="fas fa-coins text-emerald-500 text-xs"></i></div>
+                </div>
                 <div class="text-xl font-black text-emerald-600">৳ <?= number_format($total_adv_fund, 0) ?></div>
-                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= $adv_fund_pct ?>% of Profit</div>
+                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= $adv_fund_pct ?>% মোট মুনাফার</div>
               </div>
-              <div class="app-card p-5 border-l-4 border-amber-500">
-                <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">গড় KPI স্কোর</div>
-                <div class="text-2xl font-black text-amber-600"><?= number_format($avg_score, 1) ?></div>
-                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= $total_evaluations ?> টি মূল্যায়ন</div>
+              <div class="app-card p-5 border-l-4 border-amber-500 cursor-pointer hover:shadow-md transition" onclick="switchTab('evaluations')">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-[10px] font-bold uppercase tracking-wide text-slate-500">গড় KPI স্কোর</div>
+                    <div class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center"><i class="fas fa-chart-bar text-amber-500 text-xs"></i></div>
+                </div>
+                <div class="text-2xl font-black <?= $avg_score >= 75 ? 'text-emerald-600' : ($avg_score >= 50 ? 'text-amber-600' : 'text-rose-600') ?>"><?= number_format($avg_score, 1) ?></div>
+                <div class="text-[9px] font-bold text-slate-400 mt-1"><?= $total_evaluations ?> টি মূল্যায়নের ভিত্তিতে</div>
               </div>
             </div>
 

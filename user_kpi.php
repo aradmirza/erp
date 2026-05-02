@@ -3,10 +3,9 @@ ini_set('session.cookie_lifetime', 86400);
 ini_set('session.gc_maxlifetime', 86400);
 session_set_cookie_params(86400);
 session_start();
-date_default_timezone_set('Asia/Dhaka');
 
 if(!isset($_SESSION['user_logged_in'])) { header("Location: login.php"); exit; }
-require_once 'db.php';
+require_once __DIR__ . '/db.php';
 
 // Auto-create daily updates table
 try {
@@ -141,6 +140,24 @@ while(in_array($check_date->format('Y-m-d'), $report_dates)) {
 
 $perf_trend = array_slice($evaluations, 0, 3);
 $trend_scores = array_column(array_reverse($perf_trend), 'total_score');
+
+// Level system — score history থেকে level নির্ধারণ
+$all_evals_for_level = safeQuery($pdo, "SELECT total_score FROM kpi_evaluations WHERE user_id=? AND role_name=? ORDER BY created_at DESC LIMIT 6", [$uid, $role_name]);
+$avg_eval_score = count($all_evals_for_level) > 0 ? array_sum(array_column($all_evals_for_level, 'total_score')) / count($all_evals_for_level) : 0;
+$level_data = $avg_eval_score >= 90 ? ['name'=>'Diamond', 'icon'=>'fa-gem',          'color'=>'#06b6d4', 'bg'=>'#ecfeff', 'border'=>'#a5f3fc', 'next'=>''] :
+             ($avg_eval_score >= 75 ? ['name'=>'Gold',    'icon'=>'fa-trophy',       'color'=>'#f59e0b', 'bg'=>'#fffbeb', 'border'=>'#fde68a', 'next'=>'Diamond'] :
+             ($avg_eval_score >= 60 ? ['name'=>'Silver',  'icon'=>'fa-medal',        'color'=>'#94a3b8', 'bg'=>'#f8fafc', 'border'=>'#e2e8f0', 'next'=>'Gold'] :
+             ($avg_eval_score >= 40 ? ['name'=>'Bronze',  'icon'=>'fa-award',        'color'=>'#d97706', 'bg'=>'#fffbeb', 'border'=>'#fde68a', 'next'=>'Silver'] :
+                                      ['name'=>'Starter', 'icon'=>'fa-seedling',     'color'=>'#10b981', 'bg'=>'#ecfdf5', 'border'=>'#a7f3d0', 'next'=>'Bronze'])));
+
+// Streak milestone badge
+$streak_badge = '';
+if($streak >= 30)     $streak_badge = ['label'=>'🔥 ৩০ দিনের যোদ্ধা!', 'color'=>'#7c3aed', 'bg'=>'#f5f3ff', 'border'=>'#ddd6fe'];
+elseif($streak >= 14) $streak_badge = ['label'=>'⚡ দুই সপ্তাহের অগ্রগতি!', 'color'=>'#0369a1', 'bg'=>'#eff6ff', 'border'=>'#bfdbfe'];
+elseif($streak >= 7)  $streak_badge = ['label'=>'🌟 এক সপ্তাহ ধরে কাজ!', 'color'=>'#047857', 'bg'=>'#ecfdf5', 'border'=>'#a7f3d0'];
+
+// Count unread admin remarks (rejected reports or reports with remarks user hasn't ack'd)
+$unread_remarks = (int)safeColumn($pdo, "SELECT COUNT(*) FROM kpi_daily_updates WHERE user_id=? AND role_name=? AND admin_remarks IS NOT NULL AND admin_remarks != '' AND status='rejected'", [$uid, $role_name]);
 
 $curr_month = date('Y-m');
 $verified_days = (int)safeColumn($pdo, "SELECT COUNT(*) FROM kpi_daily_updates WHERE user_id=? AND role_name=? AND status='verified' AND DATE_FORMAT(report_date, '%Y-%m') = ?", [$uid, $role_name, $curr_month]);
@@ -747,6 +764,51 @@ body {
 .nav-item.active { color: var(--accent); }
 .nav-item.active i { transform: translateY(-2px); }
 
+/* ── LEVEL BADGE ── */
+.level-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 99px; border: 1.5px solid;
+    font-size: 10px; font-weight: 900; letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+/* ── STREAK MILESTONE BANNER ── */
+.streak-milestone {
+    padding: 12px 16px; border-radius: var(--radius-sm);
+    border: 1.5px solid; font-size: 12px; font-weight: 800;
+    display: flex; align-items: center; gap: 10px;
+    animation: scaleIn .4s cubic-bezier(.22,.68,0,1.2) both;
+}
+
+/* ── ADMIN FEEDBACK HIGHLIGHT ── */
+.admin-remark.urgent {
+    background: #fff7ed; border-color: #fed7aa;
+}
+.admin-remark.urgent .admin-remark-label { color: #c2410c; }
+.feedback-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #f43f5e; display: inline-block;
+    animation: pulse 1.6s ease-in-out infinite;
+    margin-left: 4px;
+}
+
+/* ── MOTIVATIONAL CARD ── */
+.motivation-card {
+    background: linear-gradient(135deg, var(--accent)08, var(--accent)15);
+    border: 1.5px solid var(--accent-border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12px; font-weight: 700; color: var(--text-2);
+    line-height: 1.6;
+}
+.motivation-icon {
+    width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+    background: var(--accent-light); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+}
+
 /* ── UTILITY ── */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 </style>
@@ -841,6 +903,18 @@ body {
                                 <?= htmlspecialchars($grade_style['label']) ?>
                             </span>
                         <?php endif; ?>
+                        <!-- Level Badge -->
+                        <span class="level-badge" style="background:<?= $level_data['bg'] ?>;color:<?= $level_data['color'] ?>;border-color:<?= $level_data['border'] ?>">
+                            <i class="fas <?= $level_data['icon'] ?>"></i>
+                            <?= $level_data['name'] ?>
+                        </span>
+                        <?php if($unread_remarks > 0): ?>
+                        <span class="badge-grade" style="background:#fff1f2;color:#e11d48;border-color:#fecdd3">
+                            <i class="fas fa-comment-dots" style="margin-right:3px"></i>
+                            <?= $unread_remarks ?> নতুন ফিডব্যাক
+                            <span class="feedback-dot"></span>
+                        </span>
+                        <?php endif; ?>
                     </div>
                     <div class="hero-stats">
                         <div class="hero-stat">
@@ -866,6 +940,32 @@ body {
             <div class="role-desc" style="margin-top:18px">
                 <i class="fas fa-info-circle"></i>
                 <div><strong>দায়িত্ব:</strong> <?= htmlspecialchars($advisor_data['role_description']) ?></div>
+            </div>
+            <?php endif; ?>
+
+            <?php if($streak_badge): ?>
+            <div class="streak-milestone" style="margin:16px 24px 0;background:<?= $streak_badge['bg'] ?>;color:<?= $streak_badge['color'] ?>;border-color:<?= $streak_badge['border'] ?>">
+                <span style="font-size:20px"><?= mb_substr($streak_badge['label'],0,2) ?></span>
+                <div>
+                    <div style="font-size:11px;font-weight:900"><?= htmlspecialchars(mb_substr($streak_badge['label'],3)) ?></div>
+                    <div style="font-size:10px;font-weight:600;opacity:.8">টানা <?= $streak ?> দিন রিপোর্ট দিচ্ছেন — অসাধারণ ধারাবাহিকতা!</div>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <?php
+            $motivations = [
+                'Exceptional' => ['আপনি অসাধারণ পারফরম্যান্স দিচ্ছেন! এই ধারা বজায় রাখুন।', 'fa-star'],
+                'Excellent'   => ['চমৎকার কাজ! আরও একটু চেষ্টা করলেই Exceptional লেভেলে পৌঁছাবেন।', 'fa-thumbs-up'],
+                'Good'        => ['ভালো যাচ্ছেন! আজকের রিপোর্ট দিয়ে স্কোর আরও বাড়ান।', 'fa-chart-line'],
+                'Average'     => ['একটু বেশি মনোযোগ দিন — আপনি আরও ভালো করতে পারবেন।', 'fa-fire'],
+                'Needs Improvement' => ['এখনো সময় আছে। আজ থেকেই নতুন করে শুরু করুন!', 'fa-rocket'],
+                'Poor'        => ['হতাশ হবেন না। প্রতিদিন ছোট ছোট পদক্ষেপ নিন।', 'fa-heart'],
+            ];
+            if($latest_grade !== 'N/A' && isset($motivations[$latest_grade])): $mot = $motivations[$latest_grade]; ?>
+            <div class="motivation-card" style="margin:12px 24px 0">
+                <div class="motivation-icon"><i class="fas <?= $mot[1] ?>"></i></div>
+                <div><?= $mot[0] ?></div>
             </div>
             <?php endif; ?>
         </div>
@@ -1014,7 +1114,13 @@ body {
                     <div class="done-text">
                         আপনি আজ (<?= date('d M, Y') ?>) তারিখের রিপোর্ট ইতিমধ্যে জমা দিয়েছেন।
                         অ্যাডমিন ভেরিফাইয়ের অপেক্ষায় আছে।
+                        <?php if($streak > 0): ?>
+                        <br><br>
+                        <strong style="color:#059669">🔥 আপনার বর্তমান streak: <?= $streak ?> দিন!</strong><br>
+                        কালকেও রিপোর্ট দিয়ে streak ধরে রাখুন।
+                        <?php else: ?>
                         কাল আবার নতুন রিপোর্ট দিতে পারবেন।
+                        <?php endif; ?>
                     </div>
                 </div>
                 <?php else: ?>
@@ -1165,10 +1271,12 @@ body {
                             <?php endif; ?>
                         </div>
                         <?php if(!empty($dr['admin_remarks'])): ?>
-                        <div class="admin-remark">
-                            <i class="fas fa-reply" style="margin-top:2px;opacity:.5"></i>
+                        <div class="admin-remark <?= $dr['status']==='rejected' ? 'urgent' : '' ?>">
+                            <i class="fas <?= $dr['status']==='rejected' ? 'fa-exclamation-circle' : 'fa-reply' ?>" style="margin-top:2px;opacity:.7"></i>
                             <div>
-                                <span class="admin-remark-label">Admin Reply</span>
+                                <span class="admin-remark-label">
+                                    <?= $dr['status']==='rejected' ? '⚠️ অ্যাডমিন মন্তব্য (Rejected)' : '✅ অ্যাডমিন ফিডব্যাক' ?>
+                                </span>
                                 <?= htmlspecialchars($dr['admin_remarks']) ?>
                             </div>
                         </div>
