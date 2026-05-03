@@ -114,6 +114,107 @@ try {
     $pdo->exec("INSERT IGNORE INTO system_settings (setting_name, setting_value) VALUES ('advisor_fund_pct', '10')");
 } catch (PDOException $e) {}
 
+// ==========================================
+// PHASE E: নতুন টেবিল তৈরি
+// ==========================================
+try {
+    // পদবী মাস্টার (Position Master)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `positions` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `position_name` VARCHAR(100) NOT NULL UNIQUE,
+      `position_name_bn` VARCHAR(100),
+      `department` VARCHAR(50),
+      `tier_level` INT DEFAULT 1,
+      `description` TEXT,
+      `is_active` TINYINT(1) DEFAULT 1,
+      `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // কর্মী (Employee — non-shareholder staff)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `employees` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `name` VARCHAR(255) NOT NULL,
+      `name_bn` VARCHAR(255),
+      `phone` VARCHAR(20),
+      `email` VARCHAR(100),
+      `nid_number` VARCHAR(20),
+      `address` TEXT,
+      `position_id` INT,
+      `department` VARCHAR(50),
+      `join_date` DATE,
+      `monthly_salary` DECIMAL(10,2) DEFAULT 0,
+      `employment_type` ENUM('full_time','part_time','contract','rider') DEFAULT 'full_time',
+      `status` ENUM('active','inactive','terminated') DEFAULT 'active',
+      `profile_picture` VARCHAR(255),
+      `emergency_contact` VARCHAR(20),
+      `bank_account` VARCHAR(50),
+      `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // KPI বিভাগ (Category Groups)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `kpi_categories` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `category_name` VARCHAR(100) NOT NULL,
+      `category_name_bn` VARCHAR(100),
+      `icon` VARCHAR(50),
+      `color` VARCHAR(20),
+      `description` TEXT
+    )");
+
+    // মাসিক লক্ষ্যমাত্রা (Monthly Targets)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `kpi_targets_monthly` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `user_id` INT NOT NULL,
+      `position_id` INT,
+      `role_name` VARCHAR(100),
+      `metric_id` INT NOT NULL,
+      `target_month` VARCHAR(7) NOT NULL,
+      `target_value` VARCHAR(255),
+      `actual_value` VARCHAR(255),
+      `status` ENUM('pending','achieved','missed') DEFAULT 'pending',
+      `set_by` INT,
+      `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // দৈনিক স্কোর ইতিহাস (Score History)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `kpi_score_history` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `user_id` INT NOT NULL,
+      `role_name` VARCHAR(100),
+      `score_date` DATE NOT NULL,
+      `daily_score` FLOAT DEFAULT 0,
+      `metrics_breakdown` TEXT,
+      `calculated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // গ্রাহক মতামত (Customer Feedback)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `customer_feedback` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `order_id` VARCHAR(50),
+      `rider_id` INT,
+      `rating` TINYINT NOT NULL,
+      `comment` TEXT,
+      `feedback_type` ENUM('delivery','support','product','general') DEFAULT 'general',
+      `status` ENUM('open','resolved','dismissed') DEFAULT 'open',
+      `resolved_by` INT,
+      `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+
+    // অডিট লগ (Audit Log)
+    $pdo->exec("CREATE TABLE IF NOT EXISTS `audit_log` (
+      `id` INT AUTO_INCREMENT PRIMARY KEY,
+      `user_id` INT,
+      `user_type` ENUM('admin','staff','shareholder') DEFAULT 'admin',
+      `action` VARCHAR(100) NOT NULL,
+      `table_name` VARCHAR(100),
+      `record_id` INT,
+      `old_value` TEXT,
+      `new_value` TEXT,
+      `ip_address` VARCHAR(45),
+      `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+} catch (PDOException $e) {}
+
 $columns_to_check = [
     ['shareholder_accounts', 'profile_picture', 'VARCHAR(255) NULL AFTER phone'],
     ['kpi_metrics', 'role_id', 'INT(11) NULL AFTER id'],
@@ -125,7 +226,21 @@ $columns_to_check = [
     ['kpi_metrics', 'is_active', "TINYINT(1) DEFAULT 1"],
     ['kpi_evaluations', 'performance_grade', "VARCHAR(50) NULL AFTER total_score"],
     ['kpi_evaluations', 'metrics_data', "TEXT NULL AFTER evaluated_by"],
-    ['advisor_targets', 'target_data', "TEXT NULL AFTER role_name"]
+    ['advisor_targets', 'target_data', "TEXT NULL AFTER role_name"],
+    // Phase E: kpi_metrics নতুন কলাম
+    ['kpi_metrics', 'category_id',        "INT NULL"],
+    ['kpi_metrics', 'kpi_type',           "ENUM('leading','lagging') DEFAULT 'lagging'"],
+    ['kpi_metrics', 'data_source',        "VARCHAR(100) NULL"],
+    ['kpi_metrics', 'formula',            "TEXT NULL"],
+    ['kpi_metrics', 'unit',               "VARCHAR(20) NULL"],
+    ['kpi_metrics', 'is_smart_compliant', "TINYINT(1) DEFAULT 0"],
+    // Phase E: kpi_evaluations নতুন কলাম
+    ['kpi_evaluations', 'auto_calculated',         "TINYINT(1) DEFAULT 0"],
+    ['kpi_evaluations', 'kpi_breakdown',            "TEXT NULL"],
+    ['kpi_evaluations', 'bonus_amount',             "DECIMAL(10,2) DEFAULT 0"],
+    ['kpi_evaluations', 'bonus_paid',               "TINYINT(1) DEFAULT 0"],
+    ['kpi_evaluations', 'evaluator_notes',          "TEXT NULL"],
+    ['kpi_evaluations', 'employee_acknowledged',    "TINYINT(1) DEFAULT 0"],
 ];
 foreach($columns_to_check as $col) {
     try {
@@ -185,6 +300,67 @@ try {
             $ms->execute([$dm[0], $dm[1], $dm[2], $dm[3], $dm[4], $def_sub]);
             $rs2->execute([$dm[0]]);
         }
+    }
+} catch (Exception $e) {}
+
+// ==========================================
+// PHASE E: ডিফল্ট ডেটা সিডিং
+// ==========================================
+try {
+    // ৬টি KPI বিভাগ (categories)
+    $cat_count = safeColumn($pdo, "SELECT COUNT(*) FROM kpi_categories");
+    if ($cat_count == 0) {
+        $cats = [
+            ['Operational',   'পরিচালন',          'fa-cogs',          '#F59E0B', 'Daily operations & process KPIs'],
+            ['Financial',     'আর্থিক',           'fa-chart-line',    '#10B981', 'Revenue, cost, profit metrics'],
+            ['Customer',      'গ্রাহক',           'fa-smile',         '#3B82F6', 'Customer satisfaction & retention'],
+            ['Quality',       'মান নিয়ন্ত্রণ',   'fa-check-circle',  '#8B5CF6', 'Quality assurance & compliance'],
+            ['Productivity',  'উৎপাদনশীলতা',     'fa-bolt',          '#EF4444', 'Output speed & efficiency'],
+            ['Compliance',    'নীতি অনুসরণ',      'fa-shield-alt',    '#6B7280', 'Rules, policy & regulation adherence'],
+        ];
+        $cs = $pdo->prepare("INSERT IGNORE INTO kpi_categories (category_name, category_name_bn, icon, color, description) VALUES (?,?,?,?,?)");
+        foreach ($cats as $c) { $cs->execute($c); }
+    }
+
+    // ২৩টি পদবী (positions)
+    $pos_count = safeColumn($pdo, "SELECT COUNT(*) FROM positions");
+    if ($pos_count == 0) {
+        $positions = [
+            // Tier 1 — নেতৃত্ব (Leadership)
+            ['CEO / Founder',               'সিইও / প্রতিষ্ঠাতা',              'Leadership',       1, 'Company vision, strategy & overall leadership'],
+            ['COO',                         'চিফ অপারেটিং অফিসার',             'Leadership',       1, 'Day-to-day operations & execution oversight'],
+            // Tier 2 — Operations
+            ['Operations Manager',          'অপারেশন ম্যানেজার',               'Operations',       2, 'Manages daily order flow, riders, and vendors'],
+            ['Fleet Manager',               'ফ্লিট ম্যানেজার',                 'Operations',       2, 'Manages vehicle/bike fleet and maintenance'],
+            ['Vendor Manager',              'ভেন্ডর ম্যানেজার',                'Operations',       2, 'Onboards & manages vendor relationships'],
+            ['Quality Control Officer',     'মান নিয়ন্ত্রণ কর্মকর্তা',       'Operations',       2, 'Ensures service quality and compliance standards'],
+            // Tier 3 — Field
+            ['Delivery Rider',              'ডেলিভারি ম্যান',                  'Field',            3, 'Last-mile delivery execution'],
+            // Tier 2 — Technology
+            ['CTO',                         'চিফ টেকনোলজি অফিসার',             'Technology',       2, 'Technical strategy and engineering oversight'],
+            ['Mobile App Developer',        'মোবাইল অ্যাপ ডেভেলপার',          'Technology',       2, 'Android/iOS app development'],
+            ['Backend Developer',           'ব্যাকএন্ড ডেভেলপার',             'Technology',       2, 'Server, API and database development'],
+            ['DevOps',                      'ডেভঅপস ইঞ্জিনিয়ার',              'Technology',       2, 'Server infrastructure, CI/CD, and deployment'],
+            // Tier 2 — Marketing
+            ['Marketing Manager',           'মার্কেটিং ম্যানেজার',             'Marketing',        2, 'Brand strategy, campaigns and customer growth'],
+            ['Digital Marketing Specialist','ডিজিটাল মার্কেটিং স্পেশালিস্ট',   'Marketing',        2, 'Social media, SEO and paid ads'],
+            ['Content Creator',             'কন্টেন্ট ক্রিয়েটর',              'Marketing',        2, 'Video, photo and written content production'],
+            ['Brand Manager',               'ব্র্যান্ড ম্যানেজার',             'Marketing',        2, 'Brand identity, messaging and PR'],
+            // Tier 2 — Finance
+            ['CFO',                         'চিফ ফিন্যান্সিয়াল অফিসার',        'Finance',          2, 'Financial planning, reporting and compliance'],
+            ['Accountant',                  'হিসাবরক্ষক',                       'Finance',          2, 'Bookkeeping, invoicing and payroll'],
+            // Tier 2 — Customer Service
+            ['CS Manager',                  'কাস্টমার সার্ভিস ম্যানেজার',      'Customer Service', 2, 'Manages support team and escalation resolution'],
+            ['CS Executive',                'কাস্টমার সার্ভিস এক্সিকিউটিভ',   'Customer Service', 2, 'Handles inbound customer calls and complaints'],
+            // Tier 2 — HR
+            ['HR Manager',                  'এইচআর ম্যানেজার',                 'HR',               2, 'Recruitment, culture and employee management'],
+            ['Recruiter',                   'রিক্রুটার',                        'HR',               2, 'Talent acquisition and onboarding'],
+            // Tier 2 — Design
+            ['UI/UX Designer',              'ইউআই/ইউএক্স ডিজাইনার',            'Design',           2, 'User experience design and prototyping'],
+            ['Graphic Designer',            'গ্রাফিক ডিজাইনার',                'Design',           2, 'Visual assets, banners and brand materials'],
+        ];
+        $ps = $pdo->prepare("INSERT IGNORE INTO positions (position_name, position_name_bn, department, tier_level, description) VALUES (?,?,?,?,?)");
+        foreach ($positions as $p) { $ps->execute($p); }
     }
 } catch (Exception $e) {}
 
