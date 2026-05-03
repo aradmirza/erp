@@ -85,7 +85,7 @@ $mother_project_id = (int)($site_settings['mother_project_id'] ?? 0);
 // SMS Function
 if (!function_exists('sendSMS')) {
     function sendSMS($phone, $otp) {
-        $api_key = 'iBfwXO9JKX7X1Yul8dGE76RPk5dOiLg7vRzQv6vM'; 
+        $api_key = $_ENV['SMS_API_KEY'] ?? '';
         $msg = "Sodai Lagbe ERP: Your OTP for password reset is $otp. Do not share this with anyone.";
         $curl = curl_init();
         curl_setopt_array($curl, array( CURLOPT_URL => 'https://api.sms.net.bd/sendsms', CURLOPT_RETURNTRANSFER => true, CURLOPT_CUSTOMREQUEST => 'POST', CURLOPT_POSTFIELDS => array('api_key' => $api_key,'msg' => $msg,'to' => $phone), ));
